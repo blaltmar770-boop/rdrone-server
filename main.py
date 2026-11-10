@@ -1,45 +1,34 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import List
 
 app = FastAPI()
 
-# قائمة اللاعبين المتصلين حالياً بالفععل
-connected_players = []
+# قائمة لتتبع اتصالات اللاعبين النشطة عبر الـ WebSocket
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
 
-class PlayerConnection(implements := BaseModel):
-    name: str
-    server_name: str
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
 
-@app.get("/")
-def home():
-    return {"status": "RdrOne Master Server is Online & Live!"}
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
 
-# جلب قائمة السيرفرات مع حساب عدد اللاعبين الحقيقيين تلقائياً
-@app.get("/servers")
-def get_servers():
-    current_players_count = len(connected_players)
-    
-    servers_database = [
-        {
-            "name": "RdrOne Official Arabic Server",
-            "players": f"{current_players_count}/100",  # العدد أصبح حقيقياً وحياً!
-            "ping": "24ms",  # يمكن ربطه بقياس حقيقي لاحقاً
-            "ip": "play.rdrone.com",
-            "port": 7777
-        }
-    ]
-    return servers_database
+    async def broadcast(self, data: str):
+        for connection in self.active_connections:
+            await connection.send_text(data)
 
-# نقطة استقبال اللاعبين عندما يضغطون على زر Connect
-@app.post("/connect")
-def player_connect(data: PlayerConnection):
-    if data.name not in connected_players:
-        connected_players.append(data.name)
-    return {"message": f"Player {data.name} joined successfully!", "total_players": len(connected_players)}
+manager = ConnectionManager()
 
-# نقطة خروج اللاعبين
-@app.post("/disconnect")
-def player_disconnect(data: PlayerConnection):
-    if data.name in connected_players:
-        connected_players.remove(data.name)
-    return {"message": f"Player {data.name} left."}
+@app.websocket("/ws/{player_name}")
+async def websocket_endpoint(websocket: WebSocket, player_name: str):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # استقبال بيانات الحركة أو إطلاق النار من لاعب وبثها للبقية
+            data = await websocket.receive_text()
+            await manager.broadcast(f"{player_name}:{data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        await manager.broadcast(f"System:{player_name} disconnected.")
